@@ -68,10 +68,12 @@ def predict(
 
     prediction_logits = outputs["pred_logits"].cpu().sigmoid()[0]  # prediction_logits.shape = (nq, 256)
     prediction_boxes = outputs["pred_boxes"].cpu()[0]  # prediction_boxes.shape = (nq, 4)
+    prediction_features = outputs["pred_features"].cpu()[0]  # prediction_features.shape = (nq, 256)
 
     mask = prediction_logits.max(dim=1)[0] > box_threshold
     logits = prediction_logits[mask]  # logits.shape = (n, 256)
     boxes = prediction_boxes[mask]  # boxes.shape = (n, 4)
+    features = prediction_features[mask]  # features.shape = (n, 256)
 
     tokenizer = model.tokenizer
     tokenized = tokenizer(caption)
@@ -82,7 +84,7 @@ def predict(
         in logits
     ]
 
-    return boxes, logits.max(dim=1)[0], phrases
+    return boxes, logits.max(dim=1)[0], phrases, features
 
 
 def annotate(image_source: np.ndarray, boxes: torch.Tensor, logits: torch.Tensor, phrases: List[str]) -> np.ndarray:
@@ -192,19 +194,21 @@ class Model:
         """
         caption = ". ".join(classes)
         processed_image = Model.preprocess_image(image_bgr=image).to(self.device)
-        boxes, logits, phrases = predict(
+        boxes, logits, phrases, features = predict(
             model=self.model,
             image=processed_image,
             caption=caption,
             box_threshold=box_threshold,
             text_threshold=text_threshold,
             device=self.device)
+        print("Phrases: ", phrases)
         source_h, source_w, _ = image.shape
         detections = Model.post_process_result(
             source_h=source_h,
             source_w=source_w,
             boxes=boxes,
-            logits=logits)
+            logits=logits,
+            features=features)
         class_id = Model.phrases2classes(phrases=phrases, classes=classes)
         detections.class_id = class_id
         return detections
@@ -227,11 +231,14 @@ class Model:
             source_h: int,
             source_w: int,
             boxes: torch.Tensor,
-            logits: torch.Tensor
+            logits: torch.Tensor,
+            features: torch.Tensor = None
     ) -> sv.Detections:
         boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
         xyxy = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
         confidence = logits.numpy()
+        if features is not None:
+            return sv.Detections(xyxy=xyxy, confidence=confidence, data={"features": features.numpy()})
         return sv.Detections(xyxy=xyxy, confidence=confidence)
 
     @staticmethod
