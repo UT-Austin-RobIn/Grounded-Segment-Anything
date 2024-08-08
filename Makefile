@@ -3,10 +3,10 @@
 # and https://github.com/IDEA-Research/Grounded-Segment-Anything/issues/84
 # when running in Docker
 # Check if nvcc is installed
-PATH := /usr/local/cuda-11.6/bin:$(PATH)
 NVCC := $(shell which nvcc)
 PWD := $(shell pwd)
-CUDA_HOME := /usr/local/cuda-11.6
+INTERACTIVE_AUDIO_HOME := /home/luca/interactive_audio/scripts/GSAM_interactive_audio
+GSAM_HOME := /home/luca/Grounded-Segment-Anything
 
 ifeq ($(NVCC),)
 	# NVCC not found
@@ -42,8 +42,8 @@ ifeq (,$(wildcard ./groundingdino_swint_ogc.pth))
 endif
 	docker run --gpus all -it --rm --net=host --privileged \
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
-	-v "${PWD}":/home/luca/Grounded-Segment-Anything \
-	-v /home/luca/interactive_audio/scripts/GSAM_interactive_audio/GroundedSAM_data:/data \
+	-v "${PWD}":"${GSAM_HOME}" \
+	-v "${INTERACTIVE_AUDIO_HOME}"/GroundedSAM_data:/data \
 	-e DISPLAY=$DISPLAY \
 	--name=gsa \
 	--ipc=host -it gsa:v0
