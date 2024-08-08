@@ -189,6 +189,7 @@ class SamAutomaticMaskGenerator:
                 "point_coords": [mask_data["points"][idx].tolist()],
                 "stability_score": mask_data["stability_score"][idx].item(),
                 "crop_box": box_xyxy_to_xywh(mask_data["crop_boxes"][idx]).tolist(),
+                "mask_embedding": mask_data["mask_embeddings"][idx].tolist(),
             }
             curr_anns.append(ann)
 
@@ -205,7 +206,15 @@ class SamAutomaticMaskGenerator:
         for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
             crop_data = self._process_crop(image, crop_box, layer_idx, orig_size)
             data.cat(crop_data)
-
+            # print("Data:", data._stats.keys()) # ['iou_preds', 'points', 'stability_score', 'boxes', 'rles', 'crop_boxes']
+            # print("iou_preds:", type(data._stats['iou_preds']), data._stats['iou_preds'].shape)
+            # print("points:", type(data._stats['points']), data._stats['points'].shape)
+            # print("stability_score:", type(data._stats['stability_score']), data._stats['stability_score'].shape)
+            # print("boxes:", type(data._stats['boxes']), data._stats['boxes'].shape)
+            # print("rles:", type(data._stats['rles']) , len(data._stats['rles']))
+            # print("crop_boxes:", type(data._stats['crop_boxes']), data._stats['crop_boxes'].shape)
+            # print("mask_embeddings:", type(data['mask_embeddings']), data['mask_embeddings'].shape)
+            
         # Remove duplicate masks between crops
         if len(crop_boxes) > 1:
             # Prefer masks from smaller crops
@@ -276,7 +285,7 @@ class SamAutomaticMaskGenerator:
         transformed_points = self.predictor.transform.apply_coords(points, im_size)
         in_points = torch.as_tensor(transformed_points, device=self.predictor.device)
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
-        masks, iou_preds, _ = self.predictor.predict_torch(
+        masks, iou_preds, _, mask_embeddings = self.predictor.predict_torch(
             in_points[:, None, :],
             in_labels[:, None],
             multimask_output=True,
@@ -287,6 +296,7 @@ class SamAutomaticMaskGenerator:
         data = MaskData(
             masks=masks.flatten(0, 1),
             iou_preds=iou_preds.flatten(0, 1),
+            mask_embeddings=mask_embeddings.flatten(0, 1),
             points=torch.as_tensor(points.repeat(masks.shape[1], axis=0)),
         )
         del masks

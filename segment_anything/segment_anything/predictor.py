@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import time
 import numpy as np
 import torch
 
@@ -50,16 +51,18 @@ class SamPredictor:
             "BGR",
         ], f"image_format must be in ['RGB', 'BGR'], is {image_format}."
         # import pdb;pdb.set_trace()
+        start = time.time()
         if image_format != self.model.image_format:
             image = image[..., ::-1]
 
         # Transform the image to the form expected by the model
-        # import pdb;pdb.set_trace()
         input_image = self.transform.apply_image(image)
         input_image_torch = torch.as_tensor(input_image, device=self.device)
         input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
 
         self.set_torch_image(input_image_torch, image.shape[:2])
+        end = time.time()
+        print(f"Image set in {end - start:.3f} seconds.")
 
     @torch.no_grad()
     def set_torch_image(
@@ -154,7 +157,7 @@ class SamPredictor:
             mask_input_torch = torch.as_tensor(mask_input, dtype=torch.float, device=self.device)
             mask_input_torch = mask_input_torch[None, :, :, :]
 
-        masks, iou_predictions, low_res_masks = self.predict_torch(
+        masks, iou_predictions, low_res_masks, mask_embeddings = self.predict_torch(
             coords_torch,
             labels_torch,
             box_torch,
@@ -165,9 +168,12 @@ class SamPredictor:
         )
 
         masks_np = masks[0].detach().cpu().numpy()
+        mask_embeddings_np = mask_embeddings[0].detach().cpu().numpy()
+        # print("Mask Embeddings Shape: ", mask_embeddings_np.shape)
+        # print("Masks Shape: ", masks_np.shape)
         iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
         low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
-        return masks_np, iou_predictions_np, low_res_masks_np
+        return masks_np, iou_predictions_np, low_res_masks_np, mask_embeddings_np
 
     @torch.no_grad()
     def predict_torch(
@@ -231,7 +237,7 @@ class SamPredictor:
         )
 
         # Predict masks
-        low_res_masks, iou_predictions = self.model.mask_decoder(
+        low_res_masks, iou_predictions, mask_embeddings = self.model.mask_decoder(
             image_embeddings=self.features,
             image_pe=self.model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
@@ -247,7 +253,7 @@ class SamPredictor:
         if not return_logits:
             masks = masks > self.model.mask_threshold
 
-        return masks, iou_predictions, low_res_masks
+        return masks, iou_predictions, low_res_masks, mask_embeddings
 
     def get_image_embedding(self) -> torch.Tensor:
         """
