@@ -39,4 +39,4 @@ RUN python -m pip install git+https://github.com/xinyu1205/recognize-anything.gi
 
 RUN mkdir /data
 WORKDIR  /home/"${APPUSER}"/Grounded-Segment-Anything
-RUN python init.py
+# RUN python init.py

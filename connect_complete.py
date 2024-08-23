@@ -21,6 +21,7 @@ from ram import inference_ram
 from PIL import Image
 import pickle as pkl
 import os
+import gc
 
 
 class GroundedSAM:
@@ -42,6 +43,8 @@ class GroundedSAM:
     data_directory = ""
     waiting_points = []
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # DEVICE = torch.device('cpu')
+
     print(f"Using device: {DEVICE}")
     # GroundingDINO config and checkpoint
     GROUNDING_DINO_CONFIG_PATH = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
@@ -58,9 +61,7 @@ class GroundedSAM:
     grounding_dino_model = Model(model_config_path=GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=GROUNDING_DINO_CHECKPOINT_PATH)
 
     # Building SAM Model and SAM Predictor
-    sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
-    sam.to(device=DEVICE)
-    sam_predictor = SamPredictor(sam)
+    
     
     def generate_labels(image):
         # initialize Recognize Anything Model
@@ -197,6 +198,8 @@ class GroundedSAM:
         NMS_THRESHOLD = 0.8
         print("Classes detected: ", GroundedSAM.CLASSES)
         # detect objects
+        GroundedSAM.grounding_dino_model = Model(model_config_path=GroundedSAM.GROUNDING_DINO_CONFIG_PATH, model_checkpoint_path=GroundedSAM.GROUNDING_DINO_CHECKPOINT_PATH)
+
         detections = GroundedSAM.grounding_dino_model.predict_with_classes(
             image=image,
             classes=GroundedSAM.CLASSES,
@@ -204,6 +207,10 @@ class GroundedSAM:
             text_threshold=TEXT_THRESHOLD
         )
         
+        del GroundedSAM.grounding_dino_model
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("Freed GroundingDINO model")
         # print(detections.data)
         print(detections.confidence)
 
@@ -223,20 +230,57 @@ class GroundedSAM:
                 
         filter_background = np.ones((len(detections.xyxy)), dtype=np.bool_)
         
+        
         for i in range(len(detections.xyxy)):
             w, h = detections.xyxy[i][2] - detections.xyxy[i][0], detections.xyxy[i][3] - detections.xyxy[i][1]
             if (w * h)/ (image.shape[0] * image.shape[1]) > 0.5:
                 print("Object " + GroundedSAM.CLASSES[detections.class_id[i]] + " removed for taking up " + str(100 * (w * h) / (image.shape[0] * image.shape[1])) + " percent of the image")
                 filter_background[i] = False
     
+        
+        
         detections.xyxy = detections.xyxy[filter_background]
         detections.confidence = detections.confidence[filter_background]
         detections.class_id = detections.class_id[filter_background]
         detections.data["features"] = detections.data["features"][filter_background]
         print("After filtering background: ", len(detections.xyxy), " boxes")
+        time.sleep(1)
+        def get_annotation_mask(image, detections: sv.Detections, annotator) -> np.ndarray:
+            annotated_image = annotator.annotate(scene=np.zeros_like(image), detections=detections)
+            brightness = np.average(annotated_image, axis=2)
+            #set everything with above average brightness to 128
+            if(annotator == mask_annotator):
+                brightness[brightness > np.average(brightness)] = 128
+            else:
+                brightness[brightness > np.average(brightness)] = 255
+            annotated_image = np.concatenate((annotated_image, np.expand_dims(brightness, axis=2)), axis=2)
+            return annotated_image
         
-    
+        def rgb_to_rgba(image: np.ndarray) -> np.ndarray:
+            transparency_mask = np.all(image == [0, 0, 0], axis=-1)
+            rgba_image = np.dstack([image, 255 - transparency_mask * 255])
+            return rgba_image
+        
+        
+        def layer_rgba(image: np.ndarray, mask: np.ndarray, alpha: bool = True) -> np.ndarray:
+            transparency = mask[:, :, 3] / 255
+            transparency = np.dstack([transparency] * 3)
+            out = image.copy() * (1 - transparency) + mask[:, :, :3] * transparency
+            if(alpha):
+                return rgb_to_rgba(out)
+            return out
+        
+        
+        rgba_image = rgb_to_rgba(image)
+        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_image.png", image)
+        boxes_only_rgba_image = get_annotation_mask(image, detections, box_label_annotator)
+        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_boxes_only.png", boxes_only_rgba_image)
+        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_boxes.png", layer_rgba(image, boxes_only_rgba_image, alpha=False))
 
+
+        GroundedSAM.sam = sam_model_registry[GroundedSAM.SAM_ENCODER_VERSION](checkpoint=GroundedSAM.SAM_CHECKPOINT_PATH)
+        GroundedSAM.sam.to(device=GroundedSAM.DEVICE)
+        GroundedSAM.sam_predictor = SamPredictor(GroundedSAM.sam)
 
         # Prompting SAM with detected boxes
         def segment(sam_predictor: SamPredictor, image: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
@@ -263,35 +307,7 @@ class GroundedSAM:
             xyxy=detections.xyxy
         )
         
-        def rgb_to_rgba(image: np.ndarray) -> np.ndarray:
-            transparency_mask = np.all(image == [0, 0, 0], axis=-1)
-            rgba_image = np.dstack([image, 255 - transparency_mask * 255])
-            return rgba_image
         
-        def get_annotation_mask(image, detections: sv.Detections, annotator) -> np.ndarray:
-            annotated_image = annotator.annotate(scene=np.zeros_like(image), detections=detections)
-            brightness = np.average(annotated_image, axis=2)
-            #set everything with above average brightness to 128
-            if(annotator == mask_annotator):
-                brightness[brightness > np.average(brightness)] = 128
-            else:
-                brightness[brightness > np.average(brightness)] = 255
-            annotated_image = np.concatenate((annotated_image, np.expand_dims(brightness, axis=2)), axis=2)
-            return annotated_image
-        
-        def layer_rgba(image: np.ndarray, mask: np.ndarray, alpha: bool = True) -> np.ndarray:
-            transparency = mask[:, :, 3] / 255
-            transparency = np.dstack([transparency] * 3)
-            out = image.copy() * (1 - transparency) + mask[:, :, :3] * transparency
-            if(alpha):
-                return rgb_to_rgba(out)
-            return out
-        
-        rgba_image = rgb_to_rgba(image)
-        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_image.png", image)
-        boxes_only_rgba_image = get_annotation_mask(image, detections, box_label_annotator)
-        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_boxes_only.png", boxes_only_rgba_image)
-        cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_boxes.png", layer_rgba(image, boxes_only_rgba_image, alpha=False))
         masks_only_rgba_image = get_annotation_mask(image, detections, mask_annotator)
         cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_masks_only.png", masks_only_rgba_image)
         cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_masks.png", layer_rgba(image, masks_only_rgba_image, alpha=False))
@@ -362,7 +378,9 @@ class GroundedSAM:
             print(f"Focus part image features shape: {focus_part_image_features.shape}")
             part_image_features.append(focus_part_image_features)
 
-        
+        del GroundedSAM.sam
+        gc.collect()
+        torch.cuda.empty_cache()
 
         annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
         annotated_image = box_label_annotator.annotate(scene=annotated_image, detections=detections)
@@ -414,8 +432,9 @@ def process_patch_points():
     points = [[int(point["x"]), int(point["y"])] for point in message["patch_points"]]
     
     if(not os.path.exists(data_directory)):
-        print("Directory does not exist: ", data_directory, "\nAborting...")
-        return
+        os.makedirs(data_directory)
+        # print("Directory does not exist: ", data_directory, "\nAborting...")
+        # return
     
     print("Processing patch points for ", message["camera_name"])
     
@@ -504,8 +523,9 @@ def dump_data(data, write_mode = None, camera = GroundedSAM.camera, directory = 
         return
 
     if(not os.path.exists(data_directory)):
-        print("Directory does not exist: ", data_directory, "\nAborting...")
-        return
+        os.makedirs(data_directory)
+        # print("Directory does not exist: ", data_directory, "\nAborting...")
+        # return
 
     if(write_mode != 1):
         
@@ -617,7 +637,48 @@ def reset_callback(message):
     print("Reset complete")
 
 
-if __name__ == '__main__':
+
+def run_without_ros():
+    images = [path for path in os.listdir("/data") if path[-4] == "."]
+    print(images)
+    for idx, image in enumerate(images):
+        print(f"Processing {image}")
+        mat = cv2.imread("/data/" + image)
+        GroundedSAM.camera = "camera" + str(idx)    
+        GroundedSAM.mask_only = False
+        GroundedSAM.write_focus_features = False
+        GroundedSAM.datetime = time.strftime("%m%d%y_%H%M%S")
+        GroundedSAM.CLASSES = ["mug", "power drill", "saucepan"]
+        
+        # Shrink the image 4x
+        
+        mat = cv2.resize(mat, fx=0.25, fy=0.25, dsize=(0, 0))
+        print(mat.shape)
+
+        detections = GroundedSAM.detect(image=mat)
+        dump_data(detections, camera=GroundedSAM.camera)
+        
+        mask = np.logical_or.reduce(detections["mask"])
+        y_idxs, x_idxs = np.where(mask)
+        
+        random_idxs = np.random.choice(range(len(x_idxs)), 10)
+        
+        for idx1, idx2 in enumerate(random_idxs):
+            x, y = x_idxs[idx2], y_idxs[idx2]
+            focus_point = {
+                "camera_name": GroundedSAM.camera,
+                "focus_point": {
+                    "x": x,
+                    "y": y
+                },
+                "policy_name": "random" + str(idx1)
+            }
+            GroundedSAM.waiting_points.append(focus_point)
+        while(len(GroundedSAM.waiting_points) > 0):
+            process_focus_point()
+        print(f"Processed {image}")
+
+def run_with_ros():
     client = roslibpy.Ros(host='127.0.0.1', port=9090)
     client.run()
     print('Running...')
@@ -698,3 +759,6 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         client.terminate()
         print("Execution Terminated")
+
+if __name__ == '__main__':
+    run_without_ros()

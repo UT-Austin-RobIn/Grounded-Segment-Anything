@@ -5,7 +5,7 @@
 # Check if nvcc is installed
 NVCC := $(shell which nvcc)
 PWD := $(shell pwd)
-INTERACTIVE_AUDIO_HOME := /home/luca/interactive_audio/scripts/GSAM_interactive_audio
+INTERACTIVE_AUDIO_HOME := /home/boueny/images
 GSAM_HOME := /home/luca/Grounded-Segment-Anything
 
 ifeq ($(NVCC),)
@@ -43,7 +43,7 @@ endif
 	docker run --gpus all -it --rm --net=host --privileged \
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
 	-v "${PWD}":"${GSAM_HOME}" \
-	-v "${INTERACTIVE_AUDIO_HOME}"/GroundedSAM_data:/data \
+	-v "${INTERACTIVE_AUDIO_HOME}":/data \
 	-e DISPLAY=$DISPLAY \
 	--name=gsa \
 	--ipc=host -it gsa:v0
