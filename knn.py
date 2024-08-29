@@ -4,7 +4,30 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import StandardScaler
 import time
 import pickle as pkl
+import laion_clap
+import numpy as np
+import librosa
 
+clap = laion_clap.CLAP_Module(enable_fusion=False)
+clap.load_ckpt()
+def compare_sounds(sound1: str, sound2: str):
+    # Load CLAP model
+    def load_and_preprocess(audio_path):
+        y, sr = librosa.load(audio_path, sr=44100)
+        return y, sr
+
+    def extract_embedding(audio_path):
+        audio_data, _ = librosa.load(audio_path, sr=44100)
+        audio_data = audio_data.reshape(1, -1) # Make it (1,T) or (N,T)
+        audio_embed = clap.get_audio_embedding_from_data(x = audio_data, use_tensor=False)
+        return audio_embed
+
+    embedding1 = extract_embedding(sound1)
+    embedding2 = extract_embedding(sound2)
+
+
+    similarity = np.dot(embedding1, embedding2.T) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
+    return similarity
 
 
 def load_data(timestamp: str, data_directory="", subdirectory="", cameras = []):
@@ -128,7 +151,10 @@ def get_focus_point(data_directory, label):
         return (int(x), int(y))
     
 def get_sound_path(data_directory, label):
-    if 
+    if data_directory[-1] != "/":
+        data_directory = data_directory + "/"
+    ts1, ts2, camera, subdirectory = label.split("_")
+    return data_directory + ts1 + "_" + ts2 + "/" + subdirectory+ ".wav"
     
 
 def load_data_label(timestamp: str, data_directory="", subdirectory=""):
@@ -223,6 +249,16 @@ def load_dataset(data_directory, subdirectory):
             labels.append(label)
     
     return labels
+
+def load_object_label(data_directory, label):
+    if data_directory[-1] != "/":
+        data_directory = data_directory + "/"
+    ts1, ts2, camera, subdirectory = label.split("_")
+    with open(data_directory + ts1 + "_" + ts2 + "/" + camera + "/label.csv", "r") as f:
+        labels = f.read().split(",")
+    with open(data_directory + ts1 + "_" + ts2 + "/" + camera + "/" + subdirectory + "/focus_object.txt", "r") as f:
+        focus_object = int(f.read())
+    return labels[focus_object]
 
 
 class KNN:

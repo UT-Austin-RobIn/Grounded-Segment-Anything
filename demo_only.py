@@ -1,9 +1,10 @@
 from uncertainty_selector import UncertaintySelector
-from knn import load_dataset, get_image_path, get_focus_point
+from knn import load_dataset, get_image_path, get_focus_point, get_sound_path, compare_sounds, load_object_label
 from knn import KNN
 import numpy as np
 import cv2
 import gc
+from scipy.io import wavfile
 
 curious_training_labels = load_dataset("/home/boueny/newer_data", "curious")
 print("Found", len(curious_training_labels), "curious labels")
@@ -12,13 +13,13 @@ print("Found", len(random_training_labels), "random labels")
 
 unfamiliar_training_labels = sum([load_dataset("/home/boueny/newer_data", "random" + str(i)) for i in range(10)], [])
 
-familiar = False
+familiar = True
 
 #Choose 25 random labels from each set to use as test data without affecting the training data
 
 if familiar:
-    curious_test_labels =np.random.choice(curious_training_labels, 0)
-    random_test_labels = np.random.choice(random_training_labels , 10)
+    curious_test_labels =np.random.choice(curious_training_labels, 20)
+    random_test_labels = np.random.choice(random_training_labels , 20)
 
     test_labels = np.concatenate((curious_test_labels, random_test_labels))
 else:
@@ -29,6 +30,10 @@ else:
 #Remove the test data from the training data
 curious_training_labels = np.setdiff1d(curious_training_labels, curious_test_labels)
 random_training_labels = np.setdiff1d(random_training_labels, random_test_labels)
+
+test_sounds = [get_sound_path("/home/boueny/newer_data", label) for label in test_labels]
+test_object_labels = [load_object_label("/home/boueny/newer_data", label) for label in test_labels]
+
 
 print("Curious training data:", len(curious_training_labels), "Curious test data:", len(curious_test_labels))
 print("Random training data:", len(random_training_labels), "Random test data:", len(random_test_labels))
@@ -55,24 +60,40 @@ curious_knn.append_from_labels(curious_training_labels[0:samples_per_iteration])
 # print("Generating KNN from random training data:", random_training_labels[0:5])
 random_knn.append_from_labels(random_training_labels[0:samples_per_iteration])
 #Graph average distance from nearest neighbor for each point in the test data over time
-
 curious_distances = []
+curious_sound_distances = []
 random_distances = []
+random_sound_distances = []
+curious_object_accuracy = []
+random_object_accuracy = []
 
 
 
 for i in range(samples_per_iteration, min(len(curious_training_labels), len(random_training_labels)), samples_per_iteration):
     print("Sample number:", i)
     random_knn.append_from_labels(random_training_labels[i:i+samples_per_iteration])
+
+    random_dists, random_labels = random_knn.get_distance(test_labels, timestamp=False)
+    random_distances.append(np.mean(random_dists))
     
-    # random_dists, _= random_knn.get_distance(test_labels, timestamp=False)
-    # random_distances.append(np.mean(random_dists))
-    # print ("Random:", np.mean(random_dists))
-    # print("\n\n\n\n")
+    random_sounds = [[get_sound_path("/home/boueny/newer_data", random_labels[i][j]) for j in range(len(random_labels[i]))] for i in range(len(random_labels))]
+    clap_distances = [[compare_sounds(test_sounds[i], random_sounds[i][j]) for j in range(len(random_sounds[i]))] for i in range(len(random_sounds))]
+    random_object_labels = [[load_object_label("/home/boueny/newer_data", random_labels[i][j]) for j in range(len(random_labels[i]))] for i in range(len(random_labels))]
+    object_label_correctness = [[test_object_labels[i] == random_object_labels[i][j] for j in range(len(random_object_labels[i]))] for i in range(len(random_object_labels))]
+    print("Object label correctness:", np.average(object_label_correctness))
+    print("Clap distances:", np.average(clap_distances))
+    random_sound_distances.append(np.average(clap_distances))
+    random_object_accuracy.append(np.average(object_label_correctness))
+        
+    
+    print ("Random:", np.mean(random_dists))
+    print("\n\n\n\n")
     
     
     image_count = 0
     np.save("random_distances.npy", random_distances)
+    np.save("random_sound_distances.npy", random_sound_distances)
+    np.save("random_object_accuracy.npy", random_object_accuracy)
 
 del random_knn
 gc.collect()
@@ -80,21 +101,30 @@ gc.collect()
 for i in range(samples_per_iteration, min(len(curious_training_labels), len(random_training_labels)), samples_per_iteration):
     print("Sample number:", i)
     curious_knn.append_from_labels(curious_training_labels[i:i+samples_per_iteration])
-    # random_knn.append_from_labels(random_training_labels[i:i+samples_per_iteration])
     
-    # curious_dists, curious_labels = curious_knn.get_distance(test_labels, timestamp=False)
-    # random_dists, _= random_knn.get_distance(random_test_labels, timestamp=False)
-    # print(random_dists)
-    # curious_distances.append(np.mean(curious_dists))
-    # random_distances.append(np.mean(random_dists))
-    # print ("Curious:", np.mean(curious_dists))
+    
+    curious_dists, curious_labels = curious_knn.get_distance(test_labels, timestamp=False)
+    curious_distances.append(np.mean(curious_dists))
+
+    curious_sounds = [[get_sound_path("/home/boueny/newer_data", curious_labels[i][j]) for j in range(len(curious_labels[i]))] for i in range(len(curious_labels))]
+    clap_distances = [[compare_sounds(test_sounds[i], curious_sounds[i][j]) for j in range(len(curious_sounds[i]))] for i in range(len(curious_sounds))]
+    curious_object_labels = [[load_object_label("/home/boueny/newer_data", curious_labels[i][j]) for j in range(len(curious_labels[i]))] for i in range(len(curious_labels))]
+    object_label_correctness = [[test_object_labels[i] == curious_object_labels[i][j] for j in range(len(curious_object_labels[i]))] for i in range(len(curious_object_labels))]
+    print("Object label correctness:", np.average(object_label_correctness))
+    print("Clap distances:", np.average(clap_distances))
+    curious_sound_distances.append(np.average(clap_distances))
+    curious_object_accuracy.append(np.average(object_label_correctness))
+
+    print ("Curious:", np.mean(curious_dists))
     print("\n\n\n\n")
 
     image_count = 0
     np.save("curious_distances.npy", curious_distances)
+    np.save("curious_sound_distances.npy", curious_sound_distances)
+    np.save("curious_object_accuracy.npy", curious_object_accuracy)
 
 
-curious_dists, curious_labels = curious_knn.get_distance(test_labels, timestamp=False)
+
 
 while True:
     test_image = cv2.imread(get_image_path("/home/boueny/newer_data", test_labels[image_count]))
