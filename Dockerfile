@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir diffusers[torch]==0.15.1 opencv-python==4.7.0.72 
     onnxruntime==1.14.1 onnx==1.13.1 ipykernel==6.16.2 scipy gradio openai
 
 WORKDIR  /home/"${APPUSER}"/Grounded-Segment-Anything/GroundingDINO 
+RUN python -m pip install numpy==1.23.5 
 RUN python -m pip install matplotlib -U
 RUN python setup.py build develop --user
 RUN python -m pip install roslibpy
@@ -39,4 +40,4 @@ RUN python -m pip install git+https://github.com/xinyu1205/recognize-anything.gi
 
 RUN mkdir /data
 WORKDIR  /home/"${APPUSER}"/Grounded-Segment-Anything
-RUN python init.py
+# RUN python init.py

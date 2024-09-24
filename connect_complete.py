@@ -18,6 +18,7 @@ import time
 import json
 from ram.models import ram
 from ram import inference_ram
+from image_net_wrapper import ImgNetWrapper
 from PIL import Image
 import pickle as pkl
 import os
@@ -33,6 +34,7 @@ class GroundedSAM:
     reset_receiver : roslibpy.Topic = None
     class_receiver : roslibpy.Topic = None
     embedding_types_receiver : roslibpy.Topic = None
+    resnet = ImgNetWrapper()
     detecting_images = []
     camera = ""
     write_focus_features = True
@@ -164,7 +166,14 @@ class GroundedSAM:
     def get_embeddings(image, embedding_type):
         if embedding_type == "sam":
             GroundedSAM.sam_predictor.set_image(image)
-            return GroundedSAM.sam_predictor.get_image_embedding().cpu().numpy()[0]
+            embeddings =  GroundedSAM.sam_predictor.get_image_embedding().cpu().numpy()[0]
+            print("SAM embeddings shape: ", embeddings.shape)
+            return embeddings
+        if embedding_type == "resnet":
+            embeddings =  GroundedSAM.resnet(image)
+            embeddings = embeddings.cpu().detach().numpy()[0]
+            print("Resnet embeddings shape: ", embeddings.shape)
+            return embeddings
         else:
             print("Invalid embedding type: " + embedding_type) 
 
@@ -440,7 +449,10 @@ def process_patch_points():
     
     print("Processing patch points for ", message["camera_name"])
     
-    embeddings = []
+    embeddings = {}
+    for embedding_type in GroundedSAM.embedding_types:
+        embeddings[embedding_type] = []
+    
     GroundedSAM.sam_predictor.reset_image()
     for point in points:
         patch_image: np.ndarray = GroundedSAM.detections[message["camera_name"]]["image"].copy()
@@ -460,14 +472,14 @@ def process_patch_points():
             y = patch_image.shape[0] - 32
         patch_image[~GroundedSAM.detections[message["camera_name"]]["object_masks"][object_id]] = 0
         patch_image = patch_image[y - 32:y + 32, x - 32:x + 32]
-        GroundedSAM.sam_predictor.set_image(patch_image)
-        embeddings.append(GroundedSAM.sam_predictor.get_image_embedding().cpu().numpy()[0])
+        for embedding_type in GroundedSAM.embedding_types:
+            embedding = GroundedSAM.get_embeddings(patch_image, embedding_type)
+            embeddings[embedding_type].append(embedding)
     
-    embeddings = np.array(embeddings)
-    print(f"Embeddings shape: {embeddings.shape}")
+
     out = {
         "patch_points": np.array(points),
-        "patch_embeddings": embeddings
+        "patch_features": embeddings
     }
     # data = base64.b64encode(pkl.dumps(out)).decode()
     # GroundedSAM.patch_sender.publish(roslibpy.Message({"data":data}))
@@ -558,6 +570,7 @@ def dump_data(data, write_mode = None, camera = GroundedSAM.camera, directory = 
                 np.save(f, data['object_image_features'][embedding_type])
             with open(data_directory + f"part_image_features_{embedding_type}.pkl", "wb") as f:
                 part_image_features = np.vstack([feature[embedding_type] for feature in data['part_image_features']])
+                pkl.dump(part_image_features, f)
         with open(data_directory + "label.csv", "w") as f:
             for idx, label in enumerate(data['label']):
                 if idx == len(data['label']) - 1:
@@ -571,7 +584,7 @@ def dump_data(data, write_mode = None, camera = GroundedSAM.camera, directory = 
 def process_focus_point():
     message = GroundedSAM.waiting_points[0]
     GroundedSAM.waiting_points = GroundedSAM.waiting_points[1:]
-    print("Received focus point request for: " + message["camera_name"])
+    print("Received focus point request for: " + message["camera_name"] + " " + message["policy_name"])
     data_directory =  message["policy_name"]
     if data_directory[-1] != "/":
         data_directory += "/"
@@ -593,7 +606,9 @@ def process_focus_point():
         print("Failed to find focus object")
         out["focus_object"] = -1
         out["focus_part"] =  -1
-        out["focus_patch_image_features"] = np.array([-1])
+        out["focus_patch_image_features"] = {}
+        for embedding_type in GroundedSAM.embedding_types:
+            out["focus_patch_image_features"][embedding_type] = -1
         dump_data(out, write_mode=2, camera=message["camera_name"], directory=data_directory)
         return
     
@@ -726,6 +741,7 @@ if __name__ == '__main__':
                 "Failed to reconnect to ROS, Aborting..."
                 client.terminate()
                 print("Execution Terminated")
+                exit(0)
     except KeyboardInterrupt:
         client.terminate()
         print("Execution Terminated")
