@@ -27,6 +27,8 @@ else
 endif
 
 # Run with sudo env "PATH=$PATH" make build-image to prevent CUDA version issues
+# Run with sudo env "PATH=$PATH" make run to prevent CUDA version issues
+
 build-image:
 	@echo "CUDA Version: $(NVCC)"
 	@echo $(BUILD_MESSAGE)
