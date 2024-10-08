@@ -317,10 +317,11 @@ class GroundedSAM:
         
         object_image_features = {}
         part_masks = []
-        part_image_features = []
+        part_image_features = {}
         
         for embedding_type in GroundedSAM.embedding_types:
             object_image_features[embedding_type] = []
+            part_image_features[embedding_type] = []
 
         for mask in range(detections.mask.shape[0]):
             print(f"Found mask {mask}, object: {GroundedSAM.CLASSES[detections.class_id[mask]]}")
@@ -390,7 +391,7 @@ class GroundedSAM:
                 
             for embedding_type in GroundedSAM.embedding_types:
                 focus_object_part_image_features[embedding_type].append(object_image_features[embedding_type][focus_mask])
-            part_image_features.append(focus_object_part_image_features)
+                part_image_features[embedding_type].append(focus_object_part_image_features[embedding_type])
 
         
 
@@ -408,6 +409,14 @@ class GroundedSAM:
             for idx, id in enumerate(part_masks):
                 print(f"Detected {len(part_masks[idx].mask)} parts for object {GroundedSAM.CLASSES[detections.class_id[idx]]}")
         print(f"Time taken: {time.time() - start_time}")
+        print("\n\n\n")
+        print(part_image_features.keys())
+        print(len(part_image_features["resnet"]))
+        for i in range(len(part_image_features["resnet"])):
+            print(len(part_image_features["resnet"][i]))
+        print(len(part_image_features["sam"]))
+        for i in range(len(part_image_features["sam"])):
+            print(len(part_image_features["sam"][i]))
 
         GroundedSAM.sam_predictor.reset_image()
         if(focus_mask is not None):
@@ -568,9 +577,8 @@ def dump_data(data, write_mode = None, camera = GroundedSAM.camera, directory = 
         for embedding_type in GroundedSAM.embedding_types:
             with open(data_directory + f"object_image_features_{embedding_type}.np", "wb") as f:
                 np.save(f, data['object_image_features'][embedding_type])
-            with open(data_directory + f"part_image_features_{embedding_type}.pkl", "wb") as f:
-                part_image_features = np.vstack([feature[embedding_type] for feature in data['part_image_features']])
-                pkl.dump(part_image_features, f)
+            with open(data_directory + f"part_image_features_{embedding_type}.np", "wb") as f:
+                np.save(f, np.array(data['part_image_features'][embedding_type]))
         with open(data_directory + "label.csv", "w") as f:
             for idx, label in enumerate(data['label']):
                 if idx == len(data['label']) - 1:
@@ -650,6 +658,8 @@ def compress_binary_mask(mask):
 
 def embedding_types_callback(message):
     GroundedSAM.embedding_types = message["data"].split(",")
+    if(message["data"] == ""):
+        GroundedSAM.embedding_types = []
     print(f"Received embedding types: {GroundedSAM.embedding_types}")
 
 def reset_callback(message):
