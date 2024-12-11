@@ -28,6 +28,7 @@ endif
 
 # Run with sudo env "PATH=$PATH" make build-image to prevent CUDA version issues
 # Run with sudo env "PATH=$PATH" make run to prevent CUDA version issues
+# If container is alread running, just call "sudo docker attach gsa"
 
 build-image:
 	@echo "CUDA Version: $(NVCC)"
@@ -45,7 +46,7 @@ endif
 	docker run --gpus all -it --rm --net=host --privileged \
 	-v /tmp/.X11-unix:/tmp/.X11-unix \
 	-v "${PWD}":"${GSAM_HOME}" \
-	-v "${INTERACTIVE_AUDIO_HOME}"/GroundedSAM_data:/data \
+	-v "${INTERACTIVE_AUDIO_HOME}"/data:/data \
 	-e DISPLAY=$DISPLAY \
 	--name=gsa \
 	--ipc=host -it gsa:v0

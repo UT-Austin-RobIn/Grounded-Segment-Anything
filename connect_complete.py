@@ -34,6 +34,7 @@ class GroundedSAM:
     reset_receiver : roslibpy.Topic = None
     class_receiver : roslibpy.Topic = None
     embedding_types_receiver : roslibpy.Topic = None
+    data_directory_receiver : roslibpy.Topic = None
     resnet = ImgNetWrapper()
     detecting_images = []
     camera = ""
@@ -263,7 +264,6 @@ class GroundedSAM:
             result_masks = []
             result_embeddings = []
             for box in xyxy:
-                #TODO: Forward mask embeddings
                 masks, scores, logits, mask_embeddings = sam_predictor.predict(
                     box=box,
                     multimask_output=True
@@ -355,6 +355,12 @@ class GroundedSAM:
             focus_mask_part_detections = GroundedSAM.auto_segment(cropped_image, old_mask=detections.mask[focus_mask][y1:y2, x1:x2])
             if(type(focus_mask_part_detections) is int):
                 print("Failed to segment parts for focus object: ", focus_mask)
+                detection = sv.Detections(xyxy=np.array([[0, 0, 0, 0]]))
+                detection.mask = []
+                detection.data["mask_features"] = []
+                part_masks.append(detection)
+                for embedding_type in GroundedSAM.embedding_types:
+                    part_image_features[embedding_type].append([])
                 continue
             #resize the masks and bounding boxes to the original image size
             focus_mask_part_detections.xyxy[:, 0] += x1
@@ -398,9 +404,13 @@ class GroundedSAM:
         annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
         annotated_image = box_label_annotator.annotate(scene=annotated_image, detections=detections)
         for part_detection in part_masks:
+            if np.sum(part_detection.xyxy) == 0:
+                continue
             annotated_image = polygon_annotator.annotate(scene=annotated_image, detections=part_detection)
         # Create a magenta circle at the focus point
         cv2.imwrite("images/" + GroundedSAM.camera + "_grounded_sam_annotated_image.png", rgb_to_rgba(annotated_image))
+        
+        
         
         # print(detections)
         print(f"Detected {len(detections.xyxy)} objects")
@@ -411,12 +421,20 @@ class GroundedSAM:
         print(f"Time taken: {time.time() - start_time}")
         print("\n\n\n")
         print(part_image_features.keys())
-        print(len(part_image_features["resnet"]))
-        for i in range(len(part_image_features["resnet"])):
-            print(len(part_image_features["resnet"][i]))
-        print(len(part_image_features["sam"]))
-        for i in range(len(part_image_features["sam"])):
-            print(len(part_image_features["sam"][i]))
+        for key in part_image_features.keys():
+            print(len(part_image_features[key]))
+            for i in range(len(part_image_features[key])):
+                print(len(part_image_features[key][i]))
+
+        
+        for i in range(len(part_masks)):
+            if(np.sum(part_masks[i].xyxy) == 0):
+                part_masks[i].mask = np.array([detections.mask[i]])
+                part_masks[i].data["mask_features"] = np.array([detections.data["mask_features"][i]])
+            else:
+                part_masks[i].mask = np.append(part_masks[i].mask, [detections.mask[i]], axis=0)
+                part_masks[i].data["mask_features"] = np.append(part_masks[i].data["mask_features"], [detections.data["mask_features"][i]], axis=0)
+
 
         GroundedSAM.sam_predictor.reset_image()
         if(focus_mask is not None):
@@ -428,8 +446,16 @@ class GroundedSAM:
             out["object_image_features"] = object_image_features
             out["object_mask_features"] = detections.data["mask_features"]
             out["part_masks"] = [part_masks[i].mask for i in range(len(part_masks))]
-            out["part_mask_features"] = [part_masks[i].data["mask_features"] for i in range(len(part_masks))]
+            out["part_mask_features"] = [part_masks[i].data["mask_features"]for i in range(len(part_masks))]
             out["part_image_features"] = part_image_features
+            
+            print()
+            print(len(out["object_masks"]))
+            print(len(out["object_image_features"]["resnet"]))  
+            print(len(out["part_masks"]))
+            print(len(out["part_mask_features"]))
+            print(len(out["part_image_features"]["resnet"]))
+            
             GroundedSAM.detections[GroundedSAM.camera] = out
             GroundedSAM.detections[GroundedSAM.camera]["image"] = image.copy()
             return out
@@ -449,7 +475,7 @@ def process_patch_points():
     if(GroundedSAM.datetime is None):
         print("No datetime set")
         return
-    data_directory = "/data/" + GroundedSAM.datetime + "/" + message["camera_name"] + "/"
+    data_directory = "/data/" + GroundedSAM.data_directory + GroundedSAM.datetime + "/" + message["camera_name"] + "/"
     points = [[int(point["x"]), int(point["y"])] for point in message["patch_points"]]
     
     if(not os.path.exists(data_directory)):
@@ -520,6 +546,10 @@ def datetime_callback(message):
     print(f"Received datetime: {message['data']}")
     GroundedSAM.datetime = message["data"]
 
+def data_directory_callback(message):
+    print(f"Received data directory: {message['data']}")
+    GroundedSAM.data_directory = message["data"]
+
 def classes_callback(message):
     GroundedSAM.CLASSES = message["data"].split(",")
     print(f"Received classes: {GroundedSAM.CLASSES}")
@@ -535,9 +565,9 @@ def dump_data(data, write_mode = None, camera = GroundedSAM.camera, directory = 
             write_mode = 1
 
     if(write_mode == 2):
-        data_directory = "/data/" + GroundedSAM.datetime + "/" + camera + "/" + directory 
+        data_directory = "/data/" + GroundedSAM.data_directory + GroundedSAM.datetime + "/" + camera + "/" + directory 
     else:
-        data_directory = "/data/" + GroundedSAM.datetime + "/" + camera + "/"
+        data_directory = "/data/" + GroundedSAM.data_directory + GroundedSAM.datetime + "/" + camera + "/"
     print (f"Dumping data to {data_directory}")
     
     if(type(data) is int):
@@ -616,7 +646,7 @@ def process_focus_point():
         out["focus_part"] =  -1
         out["focus_patch_image_features"] = {}
         for embedding_type in GroundedSAM.embedding_types:
-            out["focus_patch_image_features"][embedding_type] = -1
+            out["focus_patch_image_features"][embedding_type] = [-1]
         dump_data(out, write_mode=2, camera=message["camera_name"], directory=data_directory)
         return
     
@@ -694,6 +724,8 @@ if __name__ == '__main__':
     GroundedSAM.patch_point_receiver.subscribe(get_patch_embeddings_callback)
     GroundedSAM.datetime_receiver = roslibpy.Topic(client, '/GroundedSAM/datetime', 'std_msgs/String')
     GroundedSAM.datetime_receiver.subscribe(datetime_callback)
+    GroundedSAM.data_directory_receiver = roslibpy.Topic(client, '/GroundedSAM/data_directory', 'std_msgs/String')
+    GroundedSAM.data_directory_receiver.subscribe(data_directory_callback)
     GroundedSAM.reset_receiver = roslibpy.Topic(client, '/GroundedSAM/reset', 'std_msgs/Empty')
     GroundedSAM.reset_receiver.subscribe(reset_callback)
     GroundedSAM.class_receiver = roslibpy.Topic(client, '/GroundedSAM/classes', 'std_msgs/String')
